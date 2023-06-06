@@ -101,3 +101,7 @@ python -u main.py --local_buffer rs --local_buffer_size 2000 --batch_size 10 --r
 ## Hypothetical example
 
 ![](img/hypothetical_example.png)
+
+## Poster
+
+![](img/neurips_poster.png)
