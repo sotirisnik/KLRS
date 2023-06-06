@@ -328,7 +328,7 @@ class KLRS(Buffer):
         if actions[minu_idx]['label'] == data[1]:
             #class-specific reservoir sampling
             u = random_number( 1, self.n[ data[1] ]+1, self.rng )
-            if u <= self.max_cap:
+            if u <= self.m[ data[1] ]:
                 c =  tuple( self.position_per_cat[ data[1] ] )
                 pos = self.rng.choice( c )
                 self.q[ pos ] = data

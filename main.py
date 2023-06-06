@@ -29,6 +29,9 @@ parser.add_argument( "--pi", type=float, help="Trade off follow the stream(>0.5)
 parser.add_argument( "--test_scenario", type=str, help="balanced of follow_the_stream", default="balanced" )
 parser.add_argument( "--kl_technique", type=str, help="kl technique", default="default" )
 parser.add_argument( "--kl_alpha", type=float, help="kl alpha", default=0.5 )
+parser.add_argument( "--use_linear_grid", type=bool, help="imbalanced factors are linear", default=False )
+parser.add_argument( "--imbalanced_factor", type=int, help="imbalanced factor when linear grid is on", default=0 )
+parser.add_argument( "--permutation_seed", type=int, help="permutation seed[ only for linear grid]", default=1 )
 parser.add_argument( "--seed", type=int, help="seed", default=1 )
 
 args = parser.parse_args()
@@ -50,6 +53,7 @@ pi = args.pi
 kl_technique = args.kl_technique
 kl_alpha = args.kl_alpha
 test_scenario = args.test_scenario
+permutation_seed = args.permutation_seed
 
 seed = args.seed
 
@@ -57,7 +61,7 @@ if local_buffer not in ["nobuff","random","rs","wrs","cbrs","klrs"]:
     print( "Sorry wrong options for local buffer" )
     exit(0)
 
-if replay_method not in ['uniform','weighted']:
+if replay_method not in ['uniform','weighted','trend','boomerrank']:
     print( "Sorry wrong options for replay method" )
     exit(0)
 
@@ -145,6 +149,7 @@ print( "\tKL pi", pi )
 print( "\tKL technique", kl_technique )
 print( "\tKL alpha", kl_alpha )
 print( "\tSeed", seed )
+print( "\tPermutation Seed", permutation_seed, "[only for linear grid]" )
 
 def TryToCreate( folder_struct ):
     while True:
@@ -176,13 +181,24 @@ if os.path.exists(folder_struct) == False:
 folder_struct += "/" + str(nn_architecture)
 if os.path.exists(folder_struct) == False:
     TryToCreate( folder_struct )
+
+#if linear-grid is on
+if args.use_linear_grid:
+    folder_struct += "/lg" + str(args.imbalanced_factor)
+    if os.path.exists(folder_struct) == False:
+        TryToCreate( folder_struct )
+
+    folder_struct += "/s" + str(permutation_seed)
+    if os.path.exists(folder_struct) == False:
+        TryToCreate( folder_struct )
+
 folder_struct += "/"
 
 print( "Results will be saved at")
 print( folder_struct )
 #exit(0)
 
-if dataset_name in ['mnist','cifar10','fashion_mnist']:
+if dataset_name in ['mnist','cifar10','fashion_mnist','mnist56']:
     K = 10
 elif dataset_name == 'cifar100':
     K = 100
@@ -194,7 +210,7 @@ else:
 
 if dataset_name == 'emnist':
     emnist_ds = tfds.load( "emnist", as_supervised=True, batch_size=-1 )
-elif dataset_name == 'mnist':
+elif dataset_name in ['mnist', 'mnist56' ]:
     mnist_ds = tfds.load( "mnist", as_supervised=True, batch_size=-1 )
 elif dataset_name == 'fashion_mnist':
     fashion_mnist_ds = tfds.load( "fashion_mnist", as_supervised=True, batch_size=-1 )
@@ -230,7 +246,7 @@ def split_into_train_valid( split_rng, ipc_train, lpc_train ):
 
 split_rng = np.random.default_rng(seed)
 
-if dataset_name == 'mnist':
+if dataset_name in ['mnist','mnist56']:
     ipc_train, lpc_train = split_ds_into_classes( mnist_ds, 'train' )
     ipc_test, lpc_test = split_ds_into_classes( mnist_ds, 'test' )
     ipc_train, lpc_train, ipc_valid, lpc_valid = split_into_train_valid( split_rng, ipc_train, lpc_train )
@@ -252,7 +268,7 @@ elif dataset_name == 'emnist':
     ipc_train, lpc_train, ipc_valid, lpc_valid = split_into_train_valid( split_rng, ipc_train, lpc_train )
 
 #create imbalance
-def generate_imbalanced_factors(step,num_classes, imbalance_rng):
+def generate_imbalanced_factors(step, num_classes, imbalance_rng):
     r = np.array( [ 10**(-i*step) for i in range(5) ] )#retention factors
     r = r.repeat( np.ceil(num_classes/5) )
     perm = imbalance_rng.permutation( len(r) )
@@ -273,7 +289,16 @@ def apply_permutation( ipc, lpc, perm ):
     return new_ipc, new_lpc
 
 imbalance_rng = np.random.default_rng(seed)
-factors = generate_imbalanced_factors( step=0.5, num_classes=K, imbalance_rng=imbalance_rng )
+
+if args.use_linear_grid:
+    maxVal = ipc_train[0].shape[0]#max( [ i.shape[0] for i in ipc_train ] )
+    factors = np.linspace( maxVal//args.imbalanced_factor, maxVal, K, dtype=int )
+    factors = factors / maxVal
+    factors_perm = imbalance_rng.permutation( K-2 )+1
+    factors[1:-1] = deepcopy( factors[factors_perm] )#permute intermediate
+    factors[0], factors[-1] = deepcopy(factors[-1]), deepcopy(factors[0])#swap min,max
+else:
+    factors = generate_imbalanced_factors( step=0.5, num_classes=K, imbalance_rng=imbalance_rng )
 
 perm_rng = np.random.default_rng(seed)
 
@@ -285,19 +310,55 @@ ipc_train, lpc_train = apply_permutation( ipc_train, lpc_train, perm1 )
 ipc_test, lpc_test = apply_permutation( ipc_test, lpc_test, perm1 )
 ipc_valid, lpc_valid = apply_permutation( ipc_valid, lpc_valid, perm1 )
 #permute factors
-factors = [ factors[i] for i in perm2 ]
+if args.use_linear_grid:
+    factors = [ factors[i] for i in perm1 ]
+    linear_grid_rng = np.random.default_rng(permutation_seed)
+    order_perm = linear_grid_rng.permutation(K)
+    ipc_train, lpc_train = apply_permutation( ipc_train, lpc_train, order_perm )
+    ipc_test, lpc_test = apply_permutation( ipc_test, lpc_test, order_perm )
+    ipc_valid, lpc_valid = apply_permutation( ipc_valid, lpc_valid, order_perm )
+    factors = [ factors[i] for i in order_perm ]
+else:
+    factors = [ factors[i] for i in perm2 ]
 
 print( 'Original Stream counts', [ i.shape[0] for i in ipc_train ] )
 
 ipc_train, lpc_train = apply_imbalanced_factors( ipc_train, lpc_train, factors )#Apply imbalance factors on train-dataset only
+
 print( 'Imbalanced Stream counts', [ i.shape[0] for i in ipc_train ] )
 print( 'Imbalanced Stream labels', [ i[0] for i in lpc_train ] )
+
+def filter( images_per_class, labels_per_class, class_of_interest=[5,6] ):
+        filter_idx = []
+        images, labels = [], []
+        for i in range( len(labels_per_class) ):
+            if labels_per_class[i][0] in class_of_interest:
+                images.append( deepcopy(images_per_class[i]) )
+                labels.append( deepcopy(labels_per_class[i]) )
+        return images, labels
+
+if dataset_name == 'mnist56':
+    print( "Special case mnist56, only category 5 and 6 will appear on stream" )
+    ipc_train, lpc_train = filter( ipc_train, lpc_train, [5,6] )
+    print( 'Imbalanced Stream counts', [ i.shape[0] for i in ipc_train ] )
+    print( 'Imbalanced Stream labels', [ i[0] for i in lpc_train ] )
 
 print( 'Test counts', [ i.shape[0] for i in ipc_test ] )
 if test_scenario == 'follow_the_stream':
     ipc_test, lpc_test = apply_imbalanced_factors( ipc_test, lpc_test, factors )
     print( 'Imbalanced Test counts', [ i.shape[0] for i in ipc_test ] )
+
+if dataset_name == 'mnist56':
+    print( "Special case mnist56, only category 5 and 6 will appear on stream" )
+    ipc_test, lpc_test = filter( ipc_test, lpc_test, [5,6] )
+    print( 'Test counts', [ i.shape[0] for i in ipc_test ] )
 #ipc_valid, lpc_valid = apply_imbalanced_factors( ipc_valid, lpc_valid, factors )
+
+test_counts = sum( [ i.shape[0] for i in ipc_test ] ) 
+full_output_test = np.zeros( (test_counts,K), dtype='float' )
+true_label = np.zeros( (test_counts), dtype='int' )
+cce_vector = np.zeros( (K), dtype='float' )
+print( 'full_output_test.shape', full_output_test.shape )
 
 ###end of imbalance
 
@@ -351,7 +412,7 @@ class DataCollector:
             exit(0)
 
 def normalize( images, dataset_name ):
-    if dataset_name in [ 'mnist', 'fashion_mnist', 'emnist' ]:
+    if dataset_name in [ 'mnist', 'fashion_mnist', 'emnist', 'mnist56' ]:
         #print( 'ok' )
         images = images / 255.0
         return images
@@ -489,7 +550,7 @@ class Agent:
         else:
             self.local_buffer = None
         
-        if dataset_name in ['mnist', 'fashion_mnist','emnist']:
+        if dataset_name in ['mnist', 'fashion_mnist','emnist', 'mnist56']:
             channels = 1
             img_w, img_h = 28, 28
             def forward(x):
@@ -615,6 +676,10 @@ while agent.stream.hasNextBatch():
             #weighted replay
             if replay_method in ['weighted']:
                 replay_samples = agent.local_buffer.WeightedSample( replay_size )
+            elif replay_method in ['trend']:
+                replay_samples = agent.local_buffer.TrendSample( replay_size )
+            elif replay_method in ['boomerrank']:
+                replay_samples = agent.local_buffer.BoomerRankSample( replay_size )
             else:
                 replay_samples = agent.local_buffer.UniformSample( replay_size )
             if len(replay_samples) > 0:
@@ -673,6 +738,7 @@ while agent.stream.hasNextBatch():
     #Calculate Average accuracy and Forgeting        
     test_acc = 0.0
     forgetting = 0.0
+    fit_idx = 0
 
     for i in range( len(query_labels) ):
         
@@ -689,6 +755,9 @@ while agent.stream.hasNextBatch():
                                                 normalize(query_inp[i][z:z+evaluate_batch],dataset_name),
                                                 query_labels[i][z:z+evaluate_batch], is_training=False )
             correct += jnp.sum( stax.softmax( cl_test_predicted, axis=-1 ).argmax( axis=-1 ) == query_labels[i][z:z+evaluate_batch].argmax( axis=-1 ) )
+            
+            #print( len(query_labels[i]), query_labels[i].argmax(axis=-1) )
+            #input()
 
             if agent.stream.hasNextBatch() == False:
                 #calculate confusion matrix
@@ -696,6 +765,14 @@ while agent.stream.hasNextBatch():
                 tl_actual = query_labels[i][z:z+evaluate_batch].argmax( axis=-1 )
                 for zt in range( len(tl_actual) ):
                     confusion_matrix[ tl_actual[zt] ][ tl_predicted[zt] ] += 1
+
+                #build full_output_test
+                for tmp_idx in range( len(cl_test_predicted) ):
+                    full_output_test[ fit_idx, : ] = cl_test_predicted[tmp_idx,:]
+                    true_label[ fit_idx ] = tl_actual[ tmp_idx ]
+                    fit_idx += 1
+                #end of full_output_test
+
 
         correct /= query_inp[i].shape[0]
         
@@ -726,7 +803,7 @@ while agent.stream.hasNextBatch():
     Trade_Offs.append( trade_off )
     if local_buffer == 'klrs':
         Pis.append( agent.local_buffer.pi )
-  
+
 en = time.time()
 
 if dynamic_trade_off:
@@ -750,6 +827,16 @@ stats.append( ( 'stream_labels', [ j.item() for j in agent.stream.train_stream_l
 stats.append( ( 'total_time', en-st ) )
 stats.append( ('full_acc_per_cat', full_acc_per_cat) )
 stats.append( ('confusion_matrix', confusion_matrix) )
+
+log_prob_test = stax.logsoftmax( full_output_test )
+for i in range( test_counts ):#for each item in test
+    cce_vector[ true_label[i] ] += log_prob_test[ i, true_label[i] ]
+#normalize each category in cce_vector
+for i in range( len(query_labels) ):    
+    category = deepcopy( query_labels[i][0].argmax().item() )
+    cce_vector[ category ] /= len( query_labels[i] )
+stats.append( ('cce_vector', cce_vector) )
+#print( 'cce_vector', cce_vector )
 if local_buffer != "nobuff":
     stats.append( ( 'buffer_labels', [ j[1] for j in agent.local_buffer.q ] ) )
     stats.append( ( 'buffer_counts', agent.local_buffer.m ) )
