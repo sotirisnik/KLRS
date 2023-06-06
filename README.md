@@ -2,6 +2,10 @@
 
 Source code for NeurIPS 2022 Workshop on Human in the Loop Learning.
 
+## Poster
+
+![](img/neurips_poster.png)
+
 ## Requirements
 
 - Ubuntu 18.04 (OS)
@@ -98,10 +102,8 @@ RS with MNIST
 python -u main.py --local_buffer rs --local_buffer_size 2000 --batch_size 10 --replay_size 10 --inner_steps 5 --dataset_name mnist --agent_lr 0.05 --replay_method uniform --seed 1 --test_scenario follow_the_stream
 ```
 
+<!---
 ## Hypothetical example
 
 ![](img/hypothetical_example.png)
-
-## Poster
-
-![](img/neurips_poster.png)
+-->
